@@ -18,6 +18,11 @@ warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 info() { echo -e "${CYAN}[INFO]${NC} $*"; }
 
+# Capitalize first letter (bash 3.2 compatible)
+capitalize() {
+    echo "$1" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}'
+}
+
 # Detect platform from CI environment or git remote
 detect_platform() {
     # Check CI environment variables first
@@ -51,13 +56,13 @@ get_repo_info() {
     remote=$(git remote get-url origin 2>/dev/null || echo "")
     
     # Parse owner/repo from various URL formats (handles subgroups like gitlab.com/group/subgroup/repo)
-    if [[ "$remote" =~ ^https?://([^/]+)/(.*)/([^/]+?)(\.git)?/?$ ]]; then
+    if [[ "$remote" =~ ^https?://([^/]+)/(.+)/([^/]+)(\.git)?/?$ ]]; then
         FORGE_HOST="${BASH_REMATCH[1]}"
         OWNER="${BASH_REMATCH[2]}"
         REPO="${BASH_REMATCH[3]}"
         # Remove trailing .git from repo name if present
         REPO="${REPO%.git}"
-    elif [[ "$remote" =~ ^git@([^:]+):(.*)/([^/]+?)(\.git)?$ ]]; then
+    elif [[ "$remote" =~ ^git@([^:]+):(.+)/([^/]+)(\.git)?$ ]]; then
         FORGE_HOST="${BASH_REMATCH[1]}"
         OWNER="${BASH_REMATCH[2]}"
         REPO="${BASH_REMATCH[3]}"
@@ -139,9 +144,11 @@ update_readme_forks() {
     log "Updating README fork list..."
 
     # Build the fork table
+    local platform_cap
+    platform_cap=$(capitalize "$platform")
     local fork_table="| Fork | Platform | Status |
 |------|----------|--------|
-| [$OWNER/$REPO](https://$FORGE_HOST/$OWNER/$REPO) | ${platform^} | Origin |"
+| [$OWNER/$REPO](https://$FORGE_HOST/$OWNER/$REPO) | $platform_cap | Origin |"
 
     # Add discovered forks (limit to 20 to avoid huge tables)
     local count=0
@@ -153,7 +160,7 @@ update_readme_forks() {
             # Determine fork URL based on platform
             local fork_url="https://$FORGE_HOST/$fork"
             fork_table="$fork_table
-| [$fork]($fork_url) | ${platform^} | Fork |"
+| [$fork]($fork_url) | $platform_cap | Fork |"
             count=$((count + 1))
         done <<< "$forks"
     fi
@@ -166,12 +173,17 @@ update_readme_forks() {
     # Create temp file with updated content
     local temp_file
     temp_file=$(mktemp)
+    local table_file
+    table_file=$(mktemp)
+
+    # Write table to temp file (avoids awk multiline variable issues)
+    echo "$fork_table" > "$table_file"
 
     # Use awk to replace content between markers
-    awk -v table="$fork_table" '
+    awk '
         /<!-- SWARM_FORKS_START -->/ {
             print
-            print table
+            while ((getline line < "'"$table_file"'") > 0) print line
             skip = 1
             next
         }
@@ -181,6 +193,8 @@ update_readme_forks() {
         !skip { print }
     ' "$readme" > "$temp_file"
 
+    rm -f "$table_file"
+
     # Only update if content changed
     if ! diff -q "$readme" "$temp_file" >/dev/null 2>&1; then
         mv "$temp_file" "$readme"
@@ -188,6 +202,90 @@ update_readme_forks() {
     else
         rm "$temp_file"
         info "README fork list unchanged"
+    fi
+}
+
+# Detect if this repo is a fork and return upstream URL
+detect_upstream() {
+    local platform=$1
+
+    case "$platform" in
+        github)
+            if [ -n "$GITHUB_TOKEN" ]; then
+                curl -s -H "Authorization: token $GITHUB_TOKEN" \
+                    "https://api.github.com/repos/$OWNER/$REPO" 2>/dev/null \
+                    | jq -r '.parent.clone_url // empty'
+            else
+                curl -s "https://api.github.com/repos/$OWNER/$REPO" 2>/dev/null \
+                    | jq -r '.parent.clone_url // empty'
+            fi
+            ;;
+        gitlab)
+            local project_id="${OWNER}%2F${REPO}"
+            local parent_path
+            parent_path=$(curl -s "https://${FORGE_HOST}/api/v4/projects/${project_id}" 2>/dev/null \
+                | jq -r '.forked_from_project.path_with_namespace // empty')
+            if [ -n "$parent_path" ]; then
+                echo "https://${FORGE_HOST}/${parent_path}.git"
+            fi
+            ;;
+        gitea|forgejo)
+            curl -s "https://${FORGE_HOST}/api/v1/repos/${OWNER}/${REPO}" 2>/dev/null \
+                | jq -r '.parent.clone_url // empty'
+            ;;
+        *)
+            echo ""
+            ;;
+    esac
+}
+
+# Sync with upstream repository if this is a fork
+sync_upstream() {
+    local upstream_url=$1
+
+    if [ -z "$upstream_url" ]; then
+        info "Not a fork, skipping upstream sync"
+        return 0
+    fi
+
+    log "Syncing with upstream: $upstream_url"
+
+    # Add or update upstream remote
+    if git remote get-url upstream >/dev/null 2>&1; then
+        git remote set-url upstream "$upstream_url"
+    else
+        git remote add upstream "$upstream_url"
+    fi
+
+    # Fetch upstream (try main, then master)
+    local upstream_branch=""
+    if git fetch upstream main 2>/dev/null; then
+        upstream_branch="upstream/main"
+    elif git fetch upstream master 2>/dev/null; then
+        upstream_branch="upstream/master"
+    else
+        warn "Could not fetch from upstream"
+        return 1
+    fi
+
+    # Check if we're behind
+    local behind
+    behind=$(git rev-list --count HEAD..$upstream_branch 2>/dev/null || echo "0")
+    if [ "$behind" -eq 0 ]; then
+        info "Already up to date with upstream"
+        return 0
+    fi
+
+    log "Found $behind commits to sync from upstream"
+
+    # Try to merge
+    if git merge $upstream_branch --no-edit 2>/dev/null; then
+        log "✓ Merged $behind commits from upstream"
+    else
+        warn "Merge conflicts detected, aborting auto-merge"
+        git merge --abort 2>/dev/null || true
+        info "Manual resolution required: git fetch upstream && git merge upstream/main"
+        return 1
     fi
 }
 
@@ -205,7 +303,13 @@ main() {
     log "Repository: $OWNER/$REPO"
     log "Forge host: $FORGE_HOST"
     echo ""
-    
+
+    # Sync with upstream if this is a fork
+    log "Checking for upstream repository..."
+    UPSTREAM_URL=$(detect_upstream "$PLATFORM")
+    sync_upstream "$UPSTREAM_URL" || true
+    echo ""
+
     # Discover forks
     log "Discovering swarm topology..."
     FORKS=$(discover_forks "$PLATFORM")
