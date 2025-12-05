@@ -1,0 +1,33 @@
+pipeline:
+  swarm-coordinator:
+    image: alpine:latest
+    
+    commands:
+      # Install dependencies
+      - apk add --no-cache bash git curl jq coreutils
+      
+      # Run coordinator
+      - chmod +x ./swarm-coordinator.sh
+      - ./swarm-coordinator.sh
+      
+      # Display status
+      - |
+        if [ -f .swarm/manifest.json ]; then
+          echo "Current swarm manifest:"
+          cat .swarm/manifest.json | jq . || cat .swarm/manifest.json
+        fi
+    
+    environment:
+      - GIT_STRATEGY=clone
+    
+    when:
+      event:
+        - push
+        - cron
+      
+      branch:
+        - main
+        - master
+
+# Cron schedule (configure in Woodpecker UI)
+# Recommended: "0 */6 * * *"

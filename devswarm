@@ -1,0 +1,560 @@
+#!/usr/bin/env bash
+# devswarm - Bootstrap CLI for Self-Distributing Swarms
+# Usage: devswarm bootstrap <repo-url>
+
+set -euo pipefail
+
+VERSION="1.0.0"
+SWARM_HOME="${SWARM_HOME:-$HOME/.devswarm}"
+CACHE_DIR="$SWARM_HOME/cache"
+REPOS_DIR="$SWARM_HOME/repos"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+NC='\033[0m'
+
+log() { echo -e "${GREEN}[SWARM]${NC} $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
+error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+info() { echo -e "${CYAN}[INFO]${NC} $*"; }
+success() { echo -e "${GREEN}✓${NC} $*"; }
+
+# ============================================================================
+# BANNER
+# ============================================================================
+
+banner() {
+    cat << 'EOF'
+╔═══════════════════════════════════════════════╗
+║                                               ║
+║        🐝  DEVSWARM BOOTSTRAP CLI  🐝         ║
+║                                               ║
+║   Clone once, join the swarm instantly.       ║
+║                                               ║
+╚═══════════════════════════════════════════════╝
+EOF
+}
+
+# ============================================================================
+# REPO URL PARSING
+# ============================================================================
+
+parse_repo_url() {
+    local url=$1
+    
+    # Normalize URL (remove .git suffix, handle various formats)
+    url=$(echo "$url" | sed 's|\.git$||')
+    
+    # Extract components
+    if [[ "$url" =~ ^https?://([^/]+)/([^/]+)/([^/]+)$ ]]; then
+        FORGE_HOST="${BASH_REMATCH[1]}"
+        OWNER="${BASH_REMATCH[2]}"
+        REPO="${BASH_REMATCH[3]}"
+    elif [[ "$url" =~ ^git@([^:]+):([^/]+)/([^/]+)$ ]]; then
+        FORGE_HOST="${BASH_REMATCH[1]}"
+        OWNER="${BASH_REMATCH[2]}"
+        REPO="${BASH_REMATCH[3]}"
+    elif [[ "$url" =~ ^([^/]+)/([^/]+)/([^/]+)$ ]]; then
+        # Short format: github.com/owner/repo
+        FORGE_HOST="${BASH_REMATCH[1]}"
+        OWNER="${BASH_REMATCH[2]}"
+        REPO="${BASH_REMATCH[3]}"
+        url="https://$url"
+    elif [[ "$url" =~ ^([^/]+)/([^/]+)$ ]]; then
+        # Shortest format: owner/repo (assumes GitHub)
+        FORGE_HOST="github.com"
+        OWNER="${BASH_REMATCH[1]}"
+        REPO="${BASH_REMATCH[2]}"
+        url="https://github.com/$url"
+    else
+        error "Could not parse repo URL: $url"
+        return 1
+    fi
+    
+    # Detect platform
+    case "$FORGE_HOST" in
+        *github.com*) PLATFORM="github" ;;
+        *gitlab.com*|*gitlab.*) PLATFORM="gitlab" ;;
+        *gitea.*) PLATFORM="gitea" ;;
+        *codeberg.org*|*forgejo.*) PLATFORM="forgejo" ;;
+        *) PLATFORM="generic" ;;
+    esac
+    
+    export FORGE_HOST OWNER REPO PLATFORM CLONE_URL="$url"
+}
+
+# ============================================================================
+# SWARM DETECTION
+# ============================================================================
+
+is_swarm_repo() {
+    local repo_path=$1
+    
+    # Check for swarm coordinator
+    [[ -f "$repo_path/swarm-coordinator.sh" ]] && return 0
+    
+    # Check for swarm manifest
+    [[ -f "$repo_path/.swarm/manifest.json" ]] && return 0
+    
+    # Check for CI configs
+    [[ -f "$repo_path/.github/workflows/swarm.yml" ]] && return 0
+    [[ -f "$repo_path/.gitlab-ci.yml" ]] && grep -q "swarm-coordinator" "$repo_path/.gitlab-ci.yml" 2>/dev/null && return 0
+    
+    return 1
+}
+
+# ============================================================================
+# CLONE WITH FORK DISCOVERY
+# ============================================================================
+
+clone_repo() {
+    local url=$1
+    local dest=$2
+    
+    log "Cloning repository..."
+    
+    if git clone --depth 1 "$url" "$dest" 2>/dev/null; then
+        success "Cloned $url"
+        return 0
+    else
+        error "Failed to clone $url"
+        return 1
+    fi
+}
+
+# ============================================================================
+# DISCOVER SWARM TOPOLOGY
+# ============================================================================
+
+discover_topology() {
+    local repo_path=$1
+    
+    cd "$repo_path"
+    
+    # Check if manifest exists
+    if [[ -f ".swarm/manifest.json" ]]; then
+        log "Found existing swarm manifest"
+        cat ".swarm/manifest.json" | jq . 2>/dev/null || cat ".swarm/manifest.json"
+        return 0
+    fi
+    
+    # Try to discover via API
+    log "Discovering swarm topology via $PLATFORM API..."
+    
+    case "$PLATFORM" in
+        github)
+            FORK_COUNT=$(curl -sSL "https://api.github.com/repos/$OWNER/$REPO" 2>/dev/null \
+                | jq -r '.forks_count // 0' 2>/dev/null || echo "0")
+            ;;
+        gitlab)
+            local project_id="${OWNER}%2F${REPO}"
+            FORK_COUNT=$(curl -sSL "https://${FORGE_HOST}/api/v4/projects/${project_id}" 2>/dev/null \
+                | jq -r '.forks_count // 0' 2>/dev/null || echo "0")
+            ;;
+        *)
+            FORK_COUNT="unknown"
+            ;;
+    esac
+    
+    if [[ "$FORK_COUNT" != "unknown" ]]; then
+        info "Swarm size: $FORK_COUNT forks"
+    fi
+}
+
+# ============================================================================
+# SETUP LOCAL ENVIRONMENT
+# ============================================================================
+
+setup_environment() {
+    local repo_path=$1
+    
+    cd "$repo_path"
+    
+    log "Setting up local swarm environment..."
+    
+    # Make coordinator executable
+    if [[ -f "swarm-coordinator.sh" ]]; then
+        chmod +x swarm-coordinator.sh
+        success "Coordinator script ready"
+    fi
+    
+    # Check dependencies
+    local missing_deps=()
+    for dep in git curl jq; do
+        if ! command -v "$dep" &>/dev/null; then
+            missing_deps+=("$dep")
+        fi
+    done
+    
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+        warn "Missing dependencies: ${missing_deps[*]}"
+        info "Install with: brew install ${missing_deps[*]}"  # macOS
+        info "Or: apt-get install ${missing_deps[*]}"         # Linux
+    else
+        success "All dependencies available"
+    fi
+    
+    # Add convenient aliases to local .git/config
+    git config --local alias.swarm-status "!./swarm-coordinator.sh"
+    git config --local alias.swarm-sync "!git fetch upstream && git merge upstream/main --no-edit"
+    
+    success "Git aliases configured:"
+    info "  git swarm-status  - Check swarm health"
+    info "  git swarm-sync    - Sync with upstream"
+}
+
+# ============================================================================
+# RUN INITIAL COORDINATION
+# ============================================================================
+
+run_coordinator() {
+    local repo_path=$1
+    
+    cd "$repo_path"
+    
+    if [[ ! -f "swarm-coordinator.sh" ]]; then
+        warn "No coordinator script found, skipping initial sync"
+        return 0
+    fi
+    
+    log "Running initial swarm coordination..."
+    
+    if bash swarm-coordinator.sh; then
+        success "Initial coordination complete"
+        
+        # Show manifest if it exists
+        if [[ -f ".swarm/manifest.json" ]]; then
+            echo ""
+            info "Swarm Manifest:"
+            cat ".swarm/manifest.json" | jq . 2>/dev/null || cat ".swarm/manifest.json"
+        fi
+    else
+        warn "Coordinator failed (this is OK if repo isn't a swarm yet)"
+    fi
+}
+
+# ============================================================================
+# COMMAND: bootstrap
+# ============================================================================
+
+cmd_bootstrap() {
+    local repo_url=$1
+    
+    if [[ -z "$repo_url" ]]; then
+        error "Usage: devswarm bootstrap <repo-url>"
+        echo ""
+        info "Examples:"
+        info "  devswarm bootstrap github.com/alice/project"
+        info "  devswarm bootstrap https://gitlab.com/bob/app"
+        info "  devswarm bootstrap alice/project  (assumes GitHub)"
+        info "  devswarm bootstrap git@github.com:charlie/tool.git"
+        exit 1
+    fi
+    
+    # Parse URL
+    if ! parse_repo_url "$repo_url"; then
+        exit 1
+    fi
+    
+    log "Bootstrapping swarm from $CLONE_URL"
+    info "Platform: $PLATFORM"
+    info "Repository: $OWNER/$REPO"
+    echo ""
+    
+    # Setup directories
+    mkdir -p "$REPOS_DIR"
+    
+    # Destination path
+    local repo_path="$REPOS_DIR/$OWNER-$REPO"
+    
+    # Check if already cloned
+    if [[ -d "$repo_path" ]]; then
+        warn "Repository already cloned at $repo_path"
+        
+        read -p "Re-clone? (y/N) " -n 1 -r
+        echo ""
+        
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            rm -rf "$repo_path"
+        else
+            cd "$repo_path"
+            git pull origin main 2>/dev/null || git pull origin master 2>/dev/null || true
+            repo_path="$repo_path"
+        fi
+    fi
+    
+    # Clone if needed
+    if [[ ! -d "$repo_path" ]]; then
+        if ! clone_repo "$CLONE_URL" "$repo_path"; then
+            exit 1
+        fi
+    fi
+    
+    echo ""
+    
+    # Check if it's a swarm
+    if is_swarm_repo "$repo_path"; then
+        success "This is a swarm repository! 🐝"
+    else
+        warn "This repo is not yet a swarm"
+        info "You can initialize it with: cd $repo_path && install-swarm.sh"
+    fi
+    
+    echo ""
+    
+    # Discover topology
+    discover_topology "$repo_path"
+    
+    echo ""
+    
+    # Setup environment
+    setup_environment "$repo_path"
+    
+    echo ""
+    
+    # Run coordinator
+    run_coordinator "$repo_path"
+    
+    # Success!
+    echo ""
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${GREEN}✓ BOOTSTRAP COMPLETE${NC}"
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    info "Repository location:"
+    echo "  $repo_path"
+    echo ""
+    info "Next steps:"
+    echo "  cd $repo_path"
+    echo "  git swarm-status      # Check swarm health"
+    echo "  git swarm-sync        # Sync with upstream"
+    echo "  ./swarm-coordinator.sh # Manual coordination"
+    echo ""
+    echo -e "${CYAN}🐝 You're now part of the swarm! 🐝${NC}"
+    echo ""
+}
+
+# ============================================================================
+# COMMAND: list
+# ============================================================================
+
+cmd_list() {
+    log "Local swarm repositories:"
+    echo ""
+    
+    if [[ ! -d "$REPOS_DIR" ]] || [[ -z "$(ls -A "$REPOS_DIR" 2>/dev/null)" ]]; then
+        info "No repositories bootstrapped yet"
+        info "Use: devswarm bootstrap <repo-url>"
+        exit 0
+    fi
+    
+    # List all repos
+    for repo in "$REPOS_DIR"/*; do
+        if [[ -d "$repo" ]]; then
+            local repo_name=$(basename "$repo")
+            
+            cd "$repo"
+            
+            # Get git remote
+            local remote=$(git remote get-url origin 2>/dev/null || echo "unknown")
+            
+            # Check if swarm
+            local is_swarm="❌"
+            if is_swarm_repo "$repo"; then
+                is_swarm="🐝"
+            fi
+            
+            # Get last update
+            local last_update=$(git log -1 --format="%ar" 2>/dev/null || echo "unknown")
+            
+            echo -e "$is_swarm  ${CYAN}$repo_name${NC}"
+            echo "   Remote: $remote"
+            echo "   Updated: $last_update"
+            echo ""
+        fi
+    done
+}
+
+# ============================================================================
+# COMMAND: status
+# ============================================================================
+
+cmd_status() {
+    local repo_path=${1:-$PWD}
+    
+    if [[ ! -d "$repo_path/.git" ]]; then
+        error "Not a git repository: $repo_path"
+        exit 1
+    fi
+    
+    cd "$repo_path"
+    
+    log "Swarm Status"
+    echo ""
+    
+    # Check if swarm
+    if ! is_swarm_repo "$repo_path"; then
+        warn "Not a swarm repository"
+        info "Initialize with: install-swarm.sh"
+        exit 1
+    fi
+    
+    # Show manifest
+    if [[ -f ".swarm/manifest.json" ]]; then
+        cat ".swarm/manifest.json" | jq . 2>/dev/null || cat ".swarm/manifest.json"
+    else
+        info "No manifest found, running coordinator..."
+        bash swarm-coordinator.sh
+    fi
+}
+
+# ============================================================================
+# COMMAND: sync
+# ============================================================================
+
+cmd_sync() {
+    local repo_path=${1:-$PWD}
+    
+    if [[ ! -d "$repo_path/.git" ]]; then
+        error "Not a git repository: $repo_path"
+        exit 1
+    fi
+    
+    cd "$repo_path"
+    
+    log "Syncing swarm..."
+    
+    # Run coordinator
+    if [[ -f "swarm-coordinator.sh" ]]; then
+        bash swarm-coordinator.sh
+    else
+        error "No coordinator script found"
+        exit 1
+    fi
+}
+
+# ============================================================================
+# COMMAND: clean
+# ============================================================================
+
+cmd_clean() {
+    warn "This will remove ALL bootstrapped repositories"
+    echo ""
+    info "Location: $REPOS_DIR"
+    echo ""
+    
+    if [[ ! -d "$REPOS_DIR" ]]; then
+        info "Nothing to clean"
+        exit 0
+    fi
+    
+    # Show what will be deleted
+    log "Will delete:"
+    for repo in "$REPOS_DIR"/*; do
+        if [[ -d "$repo" ]]; then
+            echo "  - $(basename "$repo")"
+        fi
+    done
+    
+    echo ""
+    read -p "Continue? (y/N) " -n 1 -r
+    echo ""
+    
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        rm -rf "$REPOS_DIR"
+        success "Cleaned up $REPOS_DIR"
+    else
+        info "Cancelled"
+    fi
+}
+
+# ============================================================================
+# COMMAND: help
+# ============================================================================
+
+cmd_help() {
+    banner
+    echo ""
+    echo "Usage: devswarm <command> [options]"
+    echo ""
+    echo "Commands:"
+    echo "  bootstrap <url>   Clone and setup a swarm repository"
+    echo "  list              List all bootstrapped repositories"
+    echo "  status [path]     Show swarm status for a repository"
+    echo "  sync [path]       Manually sync a swarm repository"
+    echo "  clean             Remove all bootstrapped repositories"
+    echo "  help              Show this help message"
+    echo "  version           Show version information"
+    echo ""
+    echo "Examples:"
+    echo "  devswarm bootstrap github.com/alice/project"
+    echo "  devswarm bootstrap alice/project  (assumes GitHub)"
+    echo "  devswarm list"
+    echo "  devswarm status ~/code/project"
+    echo "  devswarm sync"
+    echo ""
+    echo "Environment:"
+    echo "  SWARM_HOME        Directory for swarm data (default: ~/.devswarm)"
+    echo ""
+    echo "Learn more: https://github.com/devswarm/core"
+}
+
+# ============================================================================
+# COMMAND: version
+# ============================================================================
+
+cmd_version() {
+    echo "devswarm v$VERSION"
+    echo "Self-Distributing Swarm Bootstrap CLI"
+}
+
+# ============================================================================
+# MAIN
+# ============================================================================
+
+main() {
+    # Create swarm home if needed
+    mkdir -p "$SWARM_HOME"
+    
+    # Parse command
+    local cmd=${1:-help}
+    shift || true
+    
+    case "$cmd" in
+        bootstrap|b)
+            cmd_bootstrap "$@"
+            ;;
+        list|ls|l)
+            cmd_list "$@"
+            ;;
+        status|st|s)
+            cmd_status "$@"
+            ;;
+        sync)
+            cmd_sync "$@"
+            ;;
+        clean)
+            cmd_clean "$@"
+            ;;
+        help|h|--help|-h)
+            cmd_help
+            ;;
+        version|v|--version|-v)
+            cmd_version
+            ;;
+        *)
+            error "Unknown command: $cmd"
+            echo ""
+            cmd_help
+            exit 1
+            ;;
+    esac
+}
+
+# Run
+main "$@"

@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Swarm Visualizer</title>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            overflow: hidden;
+        }
+        
+        #header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: rgba(20, 20, 20, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 1rem 2rem;
+            border-bottom: 1px solid #333;
+            z-index: 1000;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        #header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+        
+        #header .bee {
+            font-size: 2rem;
+            animation: float 3s ease-in-out infinite;
+        }
+        
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+        
+        #controls {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+        
+        input {
+            padding: 0.5rem 1rem;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 4px;
+            color: #e0e0e0;
+            font-size: 0.9rem;
+            width: 300px;
+        }
+        
+        button {
+            padding: 0.5rem 1rem;
+            background: #2563eb;
+            border: none;
+            border-radius: 4px;
+            color: white;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        button:hover {
+            background: #1d4ed8;
+        }
+        
+        #stats {
+            position: fixed;
+            top: 80px;
+            right: 20px;
+            background: rgba(20, 20, 20, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 1.5rem;
+            border-radius: 8px;
+            border: 1px solid #333;
+            min-width: 200px;
+            z-index: 999;
+        }
+        
+        #stats h3 {
+            margin-bottom: 1rem;
+            font-size: 1.1rem;
+            color: #60a5fa;
+        }
+        
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid #222;
+        }
+        
+        .stat-label {
+            color: #888;
+        }
+        
+        .stat-value {
+            font-weight: 600;
+            color: #e0e0e0;
+        }
+        
+        .health-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 0.5rem;
+        }
+        
+        .health-healthy { background: #10b981; }
+        .health-stable { background: #3b82f6; }
+        .health-vulnerable { background: #f59e0b; }
+        .health-degraded { background: #ef4444; }
+        
+        #canvas-container {
+            position: fixed;
+            top: 70px;
+            left: 0;
+            right: 0;
+            bottom: 0;
+        }
+        
+        #canvas {
+            width: 100%;
+            height: 100%;
+        }
+        
+        .node {
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .node:hover {
+            stroke-width: 3px;
+        }
+        
+        .link {
+            stroke: #444;
+            stroke-opacity: 0.6;
+            stroke-width: 1.5px;
+        }
+        
+        .node-label {
+            font-size: 11px;
+            fill: #e0e0e0;
+            pointer-events: none;
+        }
+        
+        #tooltip {
+            position: fixed;
+            display: none;
+            background: rgba(20, 20, 20, 0.95);
+            backdrop-filter: blur(10px);
+            border: 1px solid #444;
+            border-radius: 6px;
+            padding: 1rem;
+            pointer-events: none;
+            z-index: 9999;
+            min-width: 200px;
+        }
+        
+        #tooltip .repo-name {
+            font-weight: 600;
+            color: #60a5fa;
+            margin-bottom: 0.5rem;
+        }
+        
+        #tooltip .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.25rem 0;
+            font-size: 0.85rem;
+        }
+        
+        #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+        }
+        
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 3px solid #333;
+            border-top-color: #60a5fa;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        #error {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid #ef4444;
+            border-radius: 8px;
+            padding: 2rem;
+            text-align: center;
+            max-width: 400px;
+        }
+    </style>
+</head>
+<body>
+    <div id="header">
+        <div>
+            <span class="bee">🐝</span>
+            <h1 style="display: inline-block; margin-left: 0.5rem;">Swarm Visualizer</h1>
+        </div>
+        <div id="controls">
+            <input type="text" id="repo-input" placeholder="owner/repo or github.com/owner/repo" />
+            <button onclick="loadSwarm()">Load Swarm</button>
+        </div>
+    </div>
+    
+    <div id="stats">
+        <h3>Swarm Statistics</h3>
+        <div class="stat-row">
+            <span class="stat-label">Platform:</span>
+            <span class="stat-value" id="stat-platform">-</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">Total Forks:</span>
+            <span class="stat-value" id="stat-forks">-</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">Health:</span>
+            <span class="stat-value" id="stat-health">-</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">Last Updated:</span>
+            <span class="stat-value" id="stat-updated">-</span>
+        </div>
+    </div>
+    
+    <div id="canvas-container">
+        <svg id="canvas"></svg>
+    </div>
+    
+    <div id="tooltip">
+        <div class="repo-name"></div>
+        <div class="info-row">
+            <span>Platform:</span>
+            <span class="value"></span>
+        </div>
+        <div class="info-row">
+            <span>Forks:</span>
+            <span class="value"></span>
+        </div>
+    </div>
+    
+    <div id="loading">
+        <div class="spinner"></div>
+        <p>Discovering swarm topology...</p>
+    </div>
+    
+    <div id="error">
+        <h3 style="color: #ef4444; margin-bottom: 1rem;">Error</h3>
+        <p id="error-message"></p>
+    </div>
+    
+    <script>
+        // Swarm Visualizer Logic
+        
+        let simulation;
+        const width = window.innerWidth;
+        const height = window.innerHeight - 70;
+        
+        const svg = d3.select('#canvas')
+            .attr('width', width)
+            .attr('height', height);
+        
+        const g = svg.append('g');
+        
+        // Zoom behavior
+        const zoom = d3.zoom()
+            .scaleExtent([0.1, 4])
+            .on('zoom', (event) => {
+                g.attr('transform', event.transform);
+            });
+        
+        svg.call(zoom);
+        
+        // Initial zoom to center
+        svg.call(zoom.transform, d3.zoomIdentity.translate(width / 2, height / 2));
+        
+        function parseRepoUrl(input) {
+            // Normalize input
+            input = input.trim();
+            
+            // Handle various formats
+            if (input.match(/^https?:\/\/([^\/]+)\/([^\/]+)\/([^\/]+)/)) {
+                const match = input.match(/^https?:\/\/([^\/]+)\/([^\/]+)\/([^\/]+)/);
+                return {
+                    platform: detectPlatform(match[1]),
+                    owner: match[2],
+                    repo: match[3].replace('.git', '')
+                };
+            } else if (input.match(/^([^\/]+)\/([^\/]+)\/([^\/]+)/)) {
+                const match = input.match(/^([^\/]+)\/([^\/]+)\/([^\/]+)/);
+                return {
+                    platform: detectPlatform(match[1]),
+                    owner: match[2],
+                    repo: match[3]
+                };
+            } else if (input.match(/^([^\/]+)\/([^\/]+)$/)) {
+                const match = input.match(/^([^\/]+)\/([^\/]+)$/);
+                return {
+                    platform: 'github',
+                    owner: match[1],
+                    repo: match[2]
+                };
+            }
+            
+            return null;
+        }
+        
+        function detectPlatform(host) {
+            if (host.includes('github')) return 'github';
+            if (host.includes('gitlab')) return 'gitlab';
+            if (host.includes('gitea')) return 'gitea';
+            if (host.includes('codeberg')) return 'forgejo';
+            return 'generic';
+        }
+        
+        async function fetchSwarmData(platform, owner, repo) {
+            const apiUrls = {
+                github: `https://api.github.com/repos/${owner}/${repo}`,
+                gitlab: `https://gitlab.com/api/v4/projects/${encodeURIComponent(owner + '/' + repo)}`,
+                gitea: `https://gitea.io/api/v1/repos/${owner}/${repo}`
+            };
+            
+            const url = apiUrls[platform];
+            if (!url) {
+                throw new Error(`Unsupported platform: ${platform}`);
+            }
+            
+            const response = await fetch(url);
+            if (!response.ok) {
+                throw new Error(`Failed to fetch repository: ${response.statusText}`);
+            }
+            
+            return await response.json();
+        }
+        
+        async function fetchForks(platform, owner, repo) {
+            const apiUrls = {
+                github: `https://api.github.com/repos/${owner}/${repo}/forks?per_page=100`,
+                gitlab: `https://gitlab.com/api/v4/projects/${encodeURIComponent(owner + '/' + repo)}/forks?per_page=100`,
+                gitea: `https://gitea.io/api/v1/repos/${owner}/${repo}/forks?limit=100`
+            };
+            
+            const url = apiUrls[platform];
+            if (!url) return [];
+            
+            const response = await fetch(url);
+            if (!response.ok) return [];
+            
+            return await response.json();
+        }
+        
+        function calculateHealth(forkCount) {
+            if (forkCount >= 10) return 'healthy';
+            if (forkCount >= 6) return 'stable';
+            if (forkCount >= 3) return 'vulnerable';
+            return 'degraded';
+        }
+        
+        function healthColor(health) {
+            const colors = {
+                healthy: '#10b981',
+                stable: '#3b82f6',
+                vulnerable: '#f59e0b',
+                degraded: '#ef4444'
+            };
+            return colors[health] || '#666';
+        }
+        
+        function updateStats(data) {
+            document.getElementById('stat-platform').textContent = data.platform;
+            document.getElementById('stat-forks').textContent = data.forkCount;
+            
+            const health = calculateHealth(data.forkCount);
+            const healthEl = document.getElementById('stat-health');
+            healthEl.innerHTML = `<span class="health-indicator health-${health}"></span>${health}`;
+            
+            document.getElementById('stat-updated').textContent = 
+                data.updated ? new Date(data.updated).toLocaleString() : 'now';
+        }
+        
+        function visualizeSwarm(data) {
+            // Clear existing
+            g.selectAll('*').remove();
+            
+            // Build graph data
+            const nodes = [];
+            const links = [];
+            
+            // Origin node (center)
+            nodes.push({
+                id: `${data.owner}/${data.repo}`,
+                name: data.repo,
+                owner: data.owner,
+                type: 'origin',
+                platform: data.platform,
+                forks: data.forkCount
+            });
+            
+            // Fork nodes
+            data.forks.forEach((fork, i) => {
+                const forkName = fork.full_name || fork.path_with_namespace || `${fork.owner.login}/${fork.name}`;
+                nodes.push({
+                    id: forkName,
+                    name: fork.name,
+                    owner: fork.owner.login || fork.owner.username,
+                    type: 'fork',
+                    platform: data.platform,
+                    forks: fork.forks_count || 0
+                });
+                
+                links.push({
+                    source: `${data.owner}/${data.repo}`,
+                    target: forkName
+                });
+            });
+            
+            // Create force simulation
+            simulation = d3.forceSimulation(nodes)
+                .force('link', d3.forceLink(links).id(d => d.id).distance(150))
+                .force('charge', d3.forceManyBody().strength(-300))
+                .force('center', d3.forceCenter(0, 0))
+                .force('collision', d3.forceCollide().radius(50));
+            
+            // Draw links
+            const link = g.append('g')
+                .selectAll('line')
+                .data(links)
+                .join('line')
+                .attr('class', 'link');
+            
+            // Draw nodes
+            const node = g.append('g')
+                .selectAll('circle')
+                .data(nodes)
+                .join('circle')
+                .attr('class', 'node')
+                .attr('r', d => d.type === 'origin' ? 20 : 12)
+                .attr('fill', d => {
+                    if (d.type === 'origin') return '#60a5fa';
+                    return healthColor(calculateHealth(d.forks));
+                })
+                .attr('stroke', '#fff')
+                .attr('stroke-width', 2)
+                .on('mouseover', function(event, d) {
+                    const tooltip = document.getElementById('tooltip');
+                    tooltip.style.display = 'block';
+                    tooltip.style.left = (event.pageX + 10) + 'px';
+                    tooltip.style.top = (event.pageY + 10) + 'px';
+                    
+                    tooltip.querySelector('.repo-name').textContent = d.id;
+                    const values = tooltip.querySelectorAll('.value');
+                    values[0].textContent = d.platform;
+                    values[1].textContent = d.forks;
+                })
+                .on('mouseout', function() {
+                    document.getElementById('tooltip').style.display = 'none';
+                })
+                .call(d3.drag()
+                    .on('start', dragStarted)
+                    .on('drag', dragged)
+                    .on('end', dragEnded));
+            
+            // Draw labels
+            const label = g.append('g')
+                .selectAll('text')
+                .data(nodes)
+                .join('text')
+                .attr('class', 'node-label')
+                .attr('text-anchor', 'middle')
+                .attr('dy', d => d.type === 'origin' ? 35 : 25)
+                .text(d => d.name);
+            
+            // Update positions
+            simulation.on('tick', () => {
+                link
+                    .attr('x1', d => d.source.x)
+                    .attr('y1', d => d.source.y)
+                    .attr('x2', d => d.target.x)
+                    .attr('y2', d => d.target.y);
+                
+                node
+                    .attr('cx', d => d.x)
+                    .attr('cy', d => d.y);
+                
+                label
+                    .attr('x', d => d.x)
+                    .attr('y', d => d.y);
+            });
+        }
+        
+        function dragStarted(event, d) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+        }
+        
+        function dragged(event, d) {
+            d.fx = event.x;
+            d.fy = event.y;
+        }
+        
+        function dragEnded(event, d) {
+            if (!event.active) simulation.alphaTarget(0);
+            d.fx = null;
+            d.fy = null;
+        }
+        
+        async function loadSwarm() {
+            const input = document.getElementById('repo-input').value;
+            if (!input) {
+                alert('Please enter a repository URL or owner/repo');
+                return;
+            }
+            
+            const parsed = parseRepoUrl(input);
+            if (!parsed) {
+                alert('Invalid repository format');
+                return;
+            }
+            
+            // Show loading
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('error').style.display = 'none';
+            
+            try {
+                // Fetch main repo data
+                const repoData = await fetchSwarmData(parsed.platform, parsed.owner, parsed.repo);
+                
+                // Fetch forks
+                const forks = await fetchForks(parsed.platform, parsed.owner, parsed.repo);
+                
+                const swarmData = {
+                    platform: parsed.platform,
+                    owner: parsed.owner,
+                    repo: parsed.repo,
+                    forkCount: forks.length,
+                    forks: forks,
+                    updated: repoData.updated_at || repoData.last_activity_at
+                };
+                
+                // Update UI
+                updateStats(swarmData);
+                visualizeSwarm(swarmData);
+                
+                document.getElementById('loading').style.display = 'none';
+                
+            } catch (error) {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('error-message').textContent = error.message;
+                console.error('Error loading swarm:', error);
+            }
+        }
+        
+        // Handle Enter key in input
+        document.getElementById('repo-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') loadSwarm();
+        });
+        
+        // Load example on page load (optional)
+        window.addEventListener('load', () => {
+            // Optionally load a demo repo
+            // document.getElementById('repo-input').value = 'torvalds/linux';
+            // loadSwarm();
+        });
+    </script>
+</body>
+</html>

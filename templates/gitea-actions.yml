@@ -1,0 +1,42 @@
+name: Self-Distributing Swarm
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+  schedule:
+    # Run every 6 hours
+    - cron: '0 */6 * * *'
+
+jobs:
+  coordinate:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y jq curl git
+      
+      - name: Run swarm coordinator
+        env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+          FORGEJO_ACTIONS: "true"
+        run: |
+          chmod +x ./swarm-coordinator.sh
+          ./swarm-coordinator.sh
+      
+      - name: Display swarm status
+        if: always()
+        run: |
+          if [ -f .swarm/manifest.json ]; then
+            echo "Current swarm manifest:"
+            cat .swarm/manifest.json | jq .
+          fi
