@@ -1,1 +1,44 @@
-404: Not Found
+name: Self-Distributing Swarm
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+  schedule:
+    # Run every 6 hours to maintain swarm health
+    - cron: '0 */6 * * *'
+
+jobs:
+  coordinate:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write  # Need write access to commit swarm state
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for proper merging
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+      
+      - name: Run swarm coordinator
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          chmod +x ./swarm-coordinator.sh
+          ./swarm-coordinator.sh
+      
+      - name: Display swarm status
+        if: always()
+        run: |
+          if [ -f .swarm/manifest.json ]; then
+            echo "Current swarm manifest:"
+            cat .swarm/manifest.json | jq .
+          fi
