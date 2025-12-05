@@ -6,17 +6,23 @@ A Git repository that distributes and replicates itself across any Git forge usi
 
 ## Quick Start
 
-```bash
-# In your Git repository
-curl -sSL https://devswarm.org/install.sh | bash
+### Join an Existing Swarm (Recommended)
 
-# Or manually
-git clone https://github.com/devswarm/core
-cd your-repo
-../core/install-swarm.sh
+1. **Fork** this repository (click the Fork button)
+2. **Enable CI/CD** (GitHub: Actions tab → "I understand my workflows, go ahead and enable them")
+3. **Done** - you're now part of the swarm
+
+That's it. The repo already contains everything needed. No install script required.
+
+### Add Swarm to Your Own Repo
+
+```bash
+# Clone any fork and run the installer
+git clone https://github.com/HackrsValv/devswarm-cross-platform
+./devswarm-cross-platform/install-swarm.sh /path/to/your-repo
 ```
 
-That's it. Your repo is now a self-distributing swarm.
+This copies the coordinator and CI configs into your repository.
 
 ## How It Works
 
@@ -132,46 +138,52 @@ swarm-coordinator.sh          Universal coordinator (platform-agnostic)
 
 ## Installation
 
-### Option 1: Quick Install
+### Option 1: Fork (Recommended)
+
+Just fork this repo. The CI/CD configs are already included.
+
+| Platform | After Forking |
+|----------|---------------|
+| GitHub | Go to Actions tab → Enable workflows |
+| GitLab | CI runs automatically |
+| Gitea/Forgejo | Enable Actions if required by instance |
+| No CI | Run `./swarm-coordinator.sh` manually or via cron |
+
+### Option 2: Add Swarm to Existing Repo
 
 ```bash
-cd your-repo
-curl -sSL https://devswarm.org/install.sh | bash
-git push
-```
+# Clone from any fork in the swarm
+git clone https://github.com/HackrsValv/devswarm-cross-platform
 
-### Option 2: Manual Install
-
-```bash
-# Download components
-curl -O https://devswarm.org/swarm-coordinator.sh
-chmod +x swarm-coordinator.sh
-
-# GitHub
-mkdir -p .github/workflows
-curl -o .github/workflows/swarm.yml https://devswarm.org/templates/github-actions.yml
-
-# GitLab
-curl -o .gitlab-ci.yml https://devswarm.org/templates/gitlab-ci.yml
-
-# Gitea/Forgejo
-mkdir -p .gitea/workflows
-curl -o .gitea/workflows/swarm.yml https://devswarm.org/templates/gitea-actions.yml
+# Run installer pointing to your repo
+./devswarm-cross-platform/install-swarm.sh /path/to/your-repo
 
 # Commit and push
+cd /path/to/your-repo
 git add -A
 git commit -m "🐝 Initialize swarm"
 git push
 ```
 
-### Option 3: Clone and Modify
+### Option 3: Manual Setup
 
 ```bash
-git clone https://github.com/devswarm/core
-cd core
-# Modify coordinator for your needs
-# Copy to your repo
+# Copy coordinator script
+cp swarm-coordinator.sh /path/to/your-repo/
+chmod +x /path/to/your-repo/swarm-coordinator.sh
+
+# Copy CI config for your platform
+# GitHub:
+cp templates/github-actions.yml /path/to/your-repo/.github/workflows/swarm.yml
+
+# GitLab:
+cp templates/gitlab-ci.yml /path/to/your-repo/.gitlab-ci.yml
+
+# Gitea/Forgejo:
+cp templates/gitea-actions.yml /path/to/your-repo/.gitea/workflows/swarm.yml
 ```
+
+> **No central server**: Bootstrap from any fork. The swarm IS the distribution network.
 
 ## Usage
 
@@ -504,12 +516,21 @@ That's it. No servers, no containers, no orchestration, no cost.
 
 ---
 
+## Known Forks
+
+Bootstrap from any of these. This list updates as the swarm syncs.
+
+<!-- SWARM_FORKS_START -->
+| Fork | Platform | Status |
+|------|----------|--------|
+| [HackrsValv/devswarm-cross-platform](https://github.com/HackrsValv/devswarm-cross-platform) | GitHub | Origin |
+<!-- SWARM_FORKS_END -->
+
+> **Your fork not listed?** It will appear after the next swarm sync cycle (runs every 6 hours).
+> Seeing your fork here = the swarm is working.
+
+---
+
 🐝 **By reading this, you're already participating in the swarm.** 🐝
 
-If this repo disappears from GitHub, check:
-- GitLab: `gitlab.com/devswarm/core`
-- Codeberg: `codeberg.org/devswarm/core`
-- Any of the 1000+ forks
-
-The swarm persists.
-# devswarm
+If this repo disappears, clone from any fork listed above. The swarm persists.

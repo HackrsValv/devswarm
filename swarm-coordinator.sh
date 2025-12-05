@@ -107,7 +107,7 @@ discover_forks() {
 # Calculate health based on fork count
 calculate_health() {
     local fork_count=$1
-    
+
     if [ "$fork_count" -ge 10 ]; then
         echo "healthy"
     elif [ "$fork_count" -ge 6 ]; then
@@ -116,6 +116,78 @@ calculate_health() {
         echo "vulnerable"
     else
         echo "degraded"
+    fi
+}
+
+# Update README with fork list (self-propagating bootstrap)
+update_readme_forks() {
+    local platform=$1
+    local forks=$2
+    local readme="README.md"
+
+    if [ ! -f "$readme" ]; then
+        warn "README.md not found, skipping fork list update"
+        return
+    fi
+
+    # Check for markers
+    if ! grep -q "SWARM_FORKS_START" "$readme"; then
+        info "No SWARM_FORKS markers in README, skipping fork list update"
+        return
+    fi
+
+    log "Updating README fork list..."
+
+    # Build the fork table
+    local fork_table="| Fork | Platform | Status |
+|------|----------|--------|
+| [$OWNER/$REPO](https://$FORGE_HOST/$OWNER/$REPO) | ${platform^} | Origin |"
+
+    # Add discovered forks (limit to 20 to avoid huge tables)
+    local count=0
+    if [ -n "$forks" ]; then
+        while IFS= read -r fork; do
+            [ -z "$fork" ] && continue
+            [ $count -ge 20 ] && break
+
+            # Determine fork URL based on platform
+            local fork_url="https://$FORGE_HOST/$fork"
+            fork_table="$fork_table
+| [$fork]($fork_url) | ${platform^} | Fork |"
+            count=$((count + 1))
+        done <<< "$forks"
+    fi
+
+    if [ "$FORK_COUNT" -gt 20 ]; then
+        fork_table="$fork_table
+| ... | | +$((FORK_COUNT - 20)) more |"
+    fi
+
+    # Create temp file with updated content
+    local temp_file
+    temp_file=$(mktemp)
+
+    # Use awk to replace content between markers
+    awk -v table="$fork_table" '
+        /<!-- SWARM_FORKS_START -->/ {
+            print
+            print table
+            skip = 1
+            next
+        }
+        /<!-- SWARM_FORKS_END -->/ {
+            skip = 0
+        }
+        !skip { print }
+    ' "$readme" > "$temp_file"
+
+    # Only update if content changed
+    if ! diff -q "$readme" "$temp_file" >/dev/null 2>&1; then
+        mv "$temp_file" "$readme"
+        log "✓ README fork list updated"
+    else
+        rm "$temp_file"
+        info "README fork list unchanged"
     fi
 }
 
@@ -220,15 +292,26 @@ main() {
       }' > .swarm/manifest.json
     
     log "✓ Swarm manifest updated"
-    
+
+    # Update README with fork list (self-propagating bootstrap list)
+    update_readme_forks "$PLATFORM" "$FORKS"
+
     # Commit changes (if any) - use --local to not affect global git config
     git config --local user.name "Swarm Coordinator" 2>/dev/null || true
     git config --local user.email "swarm@devswarm.local" 2>/dev/null || true
     
-    # Check if .swarm directory exists and has changes
+    # Check for changes in .swarm/ or README.md
+    local has_changes=false
     if [ -d .swarm ] && ! git diff --quiet .swarm/ 2>/dev/null; then
-        git add .swarm/
-        
+        has_changes=true
+    fi
+    if [ -f README.md ] && ! git diff --quiet README.md 2>/dev/null; then
+        has_changes=true
+    fi
+
+    if [ "$has_changes" = true ]; then
+        git add .swarm/ README.md 2>/dev/null || git add .swarm/
+
         # Try to commit with proper error handling
         COMMIT_OUTPUT=$(git commit -m "🐝 Swarm: Update topology ($FORK_COUNT forks on $PLATFORM)" 2>&1)
         COMMIT_EXIT=$?
