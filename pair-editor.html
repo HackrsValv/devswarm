@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DevSwarm Pair Editor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Monaco', 'Menlo', monospace;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #header {
+            background: #252526;
+            padding: 10px 20px;
+            border-bottom: 1px solid #3c3c3c;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        #header h1 {
+            font-size: 16px;
+            font-weight: 500;
+            color: #cccccc;
+        }
+
+        #status {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            font-size: 12px;
+        }
+
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #666;
+        }
+
+        .status-indicator.connected {
+            background: #4ec9b0;
+            box-shadow: 0 0 8px #4ec9b0;
+        }
+
+        #peers {
+            color: #858585;
+        }
+
+        #editor-container {
+            flex: 1;
+            display: flex;
+            position: relative;
+            overflow: hidden;
+        }
+
+        #editor {
+            width: 100%;
+            height: 100%;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        #chat {
+            width: 300px;
+            background: #252526;
+            border-left: 1px solid #3c3c3c;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #chat-messages {
+            flex: 1;
+            padding: 10px;
+            overflow-y: auto;
+            font-size: 13px;
+        }
+
+        .chat-message {
+            margin-bottom: 10px;
+        }
+
+        .chat-user {
+            color: #4ec9b0;
+            font-weight: bold;
+        }
+
+        #chat-input {
+            border-top: 1px solid #3c3c3c;
+            padding: 10px;
+        }
+
+        #chat-input input {
+            width: 100%;
+            background: #3c3c3c;
+            border: none;
+            padding: 8px;
+            color: #d4d4d4;
+            border-radius: 3px;
+            font-family: inherit;
+        }
+
+        #chat-input input:focus {
+            outline: 1px solid #007acc;
+        }
+
+        #config-panel {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #252526;
+            border: 1px solid #3c3c3c;
+            border-radius: 6px;
+            padding: 30px;
+            z-index: 1000;
+            min-width: 400px;
+        }
+
+        #config-panel.hidden {
+            display: none;
+        }
+
+        .config-field {
+            margin-bottom: 20px;
+        }
+
+        .config-field label {
+            display: block;
+            margin-bottom: 5px;
+            color: #cccccc;
+            font-size: 13px;
+        }
+
+        .config-field input {
+            width: 100%;
+            background: #3c3c3c;
+            border: 1px solid #555;
+            padding: 8px;
+            color: #d4d4d4;
+            border-radius: 3px;
+            font-family: inherit;
+        }
+
+        .config-field input:focus {
+            outline: none;
+            border-color: #007acc;
+        }
+
+        button {
+            background: #0e639c;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 13px;
+        }
+
+        button:hover {
+            background: #1177bb;
+        }
+
+        button:active {
+            background: #0d5a8f;
+        }
+    </style>
+</head>
+<body>
+    <div id="header">
+        <h1>🐝 DevSwarm Pair Editor</h1>
+        <div id="status">
+            <div class="status-indicator" id="connection-indicator"></div>
+            <span id="connection-text">Disconnected</span>
+            <span id="peers">0 peers</span>
+        </div>
+    </div>
+
+    <div id="editor-container">
+        <div id="editor"></div>
+        <div id="chat">
+            <div id="chat-messages"></div>
+            <div id="chat-input">
+                <input type="text" id="chat-input-field" placeholder="Type message...">
+            </div>
+        </div>
+    </div>
+
+    <div id="config-panel">
+        <h2 style="margin-bottom: 20px; color: #cccccc;">Join Session</h2>
+        <div class="config-field">
+            <label for="sync-server">Sync Server URL</label>
+            <input type="text" id="sync-server" placeholder="wss://sync.example.com">
+        </div>
+        <div class="config-field">
+            <label for="room-name">Room Name</label>
+            <input type="text" id="room-name" value="devswarm-main">
+        </div>
+        <div class="config-field">
+            <label for="username">Your Name</label>
+            <input type="text" id="username" placeholder="Developer">
+        </div>
+        <button id="connect-btn">Connect</button>
+    </div>
+
+    <!-- Monaco Editor -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
+    
+    <!-- Yjs + WebSocket Provider -->
+    <script src="https://cdn.jsdelivr.net/npm/yjs@13.6.10/dist/yjs.mjs" type="module"></script>
+    <script src="https://cdn.jsdelivr.net/npm/y-websocket@1.5.0/dist/y-websocket.mjs" type="module"></script>
+    <script src="https://cdn.jsdelivr.net/npm/y-monaco@0.1.4/dist/y-monaco.mjs" type="module"></script>
+
+    <script type="module">
+        import * as Y from 'https://cdn.jsdelivr.net/npm/yjs@13.6.10/dist/yjs.mjs'
+        import { WebsocketProvider } from 'https://cdn.jsdelivr.net/npm/y-websocket@1.5.0/dist/y-websocket.mjs'
+        import { MonacoBinding } from 'https://cdn.jsdelivr.net/npm/y-monaco@0.1.4/dist/y-monaco.mjs'
+
+        let editor, ydoc, provider, binding
+
+        // Initialize Monaco Editor
+        require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' }})
+        require(['vs/editor/editor.main'], function() {
+            editor = monaco.editor.create(document.getElementById('editor'), {
+                value: '// Waiting for connection...\n',
+                language: 'javascript',
+                theme: 'vs-dark',
+                automaticLayout: true,
+                fontSize: 14,
+                minimap: { enabled: false }
+            })
+        })
+
+        // Connect button handler
+        document.getElementById('connect-btn').addEventListener('click', () => {
+            const serverUrl = document.getElementById('sync-server').value
+            const room = document.getElementById('room-name').value
+            const username = document.getElementById('username').value
+
+            if (!serverUrl || !room || !username) {
+                alert('Please fill in all fields')
+                return
+            }
+
+            // Save to localStorage
+            localStorage.setItem('devswarm-server', serverUrl)
+            localStorage.setItem('devswarm-room', room)
+            localStorage.setItem('devswarm-username', username)
+
+            // Hide config panel
+            document.getElementById('config-panel').classList.add('hidden')
+
+            // Connect to swarm
+            connectToSwarm(serverUrl, room, username)
+        })
+
+        // Auto-fill from localStorage
+        if (localStorage.getItem('devswarm-server')) {
+            document.getElementById('sync-server').value = localStorage.getItem('devswarm-server')
+            document.getElementById('room-name').value = localStorage.getItem('devswarm-room')
+            document.getElementById('username').value = localStorage.getItem('devswarm-username')
+        }
+
+        function connectToSwarm(serverUrl, room, username) {
+            // Create Yjs document
+            ydoc = new Y.Doc()
+
+            // Connect to WebSocket server
+            provider = new WebsocketProvider(serverUrl, room, ydoc, {
+                connect: true
+            })
+
+            const ytext = ydoc.getText('monaco')
+            const awareness = provider.awareness
+
+            // Set user info
+            awareness.setLocalStateField('user', {
+                name: username,
+                color: getRandomColor()
+            })
+
+            // Bind Yjs to Monaco
+            binding = new MonacoBinding(
+                ytext,
+                editor.getModel(),
+                new Set([editor]),
+                awareness
+            )
+
+            // Update connection status
+            provider.on('status', event => {
+                const indicator = document.getElementById('connection-indicator')
+                const text = document.getElementById('connection-text')
+                
+                if (event.status === 'connected') {
+                    indicator.classList.add('connected')
+                    text.textContent = 'Connected'
+                } else {
+                    indicator.classList.remove('connected')
+                    text.textContent = 'Disconnected'
+                }
+            })
+
+            // Update peer count
+            awareness.on('change', () => {
+                const peers = awareness.getStates().size - 1 // Exclude self
+                document.getElementById('peers').textContent = `${peers} peer${peers !== 1 ? 's' : ''}`
+            })
+
+            // Chat functionality
+            const ychat = ydoc.getArray('chat')
+            
+            ychat.observe(() => {
+                updateChat()
+            })
+
+            document.getElementById('chat-input-field').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter' && e.target.value.trim()) {
+                    ychat.push([{
+                        user: username,
+                        message: e.target.value.trim(),
+                        timestamp: Date.now()
+                    }])
+                    e.target.value = ''
+                }
+            })
+
+            function updateChat() {
+                const messages = ychat.toArray()
+                const chatDiv = document.getElementById('chat-messages')
+                chatDiv.innerHTML = messages.map(msg => 
+                    `<div class="chat-message">
+                        <span class="chat-user">${msg.user}:</span>
+                        <span>${msg.message}</span>
+                    </div>`
+                ).join('')
+                chatDiv.scrollTop = chatDiv.scrollHeight
+            }
+
+            console.log('✓ Connected to swarm:', room)
+        }
+
+        function getRandomColor() {
+            const colors = ['#4ec9b0', '#569cd6', '#c586c0', '#9cdcfe', '#ce9178', '#dcdcaa']
+            return colors[Math.floor(Math.random() * colors.length)]
+        }
+    </script>
+</body>
+</html>
