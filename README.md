@@ -14,6 +14,15 @@ A Git repository that distributes and replicates itself across any Git forge usi
 
 That's it. The repo already contains everything needed. No install script required.
 
+### Try Pair Programming (New!)
+
+1. **Open** `pair-editor.html` in your browser
+2. **Connect** to `wss://demos.yjs.dev` with room `devswarm-test-123`
+3. **Share** the room name with others
+4. **Code together** in real-time
+
+See [PAIR_PROGRAMMING.md](PAIR_PROGRAMMING.md) for full guide.
+
 ### Add Swarm to Your Own Repo
 
 ```bash
@@ -471,14 +480,19 @@ git push
 
 ## Roadmap
 
-- [ ] Bootstrap CLI (tool #1) ← NEXT
-- [ ] Visualization dashboard (tool #2) 
-- [x] Cross-platform support (tool #3) ← DONE
-- [ ] IPFS integration for hybrid distribution
-- [ ] Erasure coding for fragment distribution
-- [ ] Swarm health metrics dashboard
-- [ ] Auto-migration on platform failure
-- [ ] P2P sync without platform APIs
+- [x] Cross-platform support (tool #3) ✅ DONE
+- [x] Bootstrap CLI (tool #1) ✅ DONE
+- [x] Visualization dashboard (tool #2) ✅ DONE
+- [x] Pair programming editor ✅ DONE (2025-12-12)
+- [ ] IPFS fragment storage ← NEXT (Week 1)
+- [ ] Erasure coding (k=6, m=3) ← NEXT (Week 1)
+- [ ] Age encryption for fragments ← NEXT (Week 1)
+- [ ] Multi-backend storage (IPFS + GitHub + S3) (Week 2)
+- [ ] CRDT agent coordination (Week 3)
+- [ ] Auto-migration on platform failure (Month 2)
+
+**Current Phase:** Pair programming + IPFS integration
+**See:** [TODO.md](TODO.md) for detailed task list
 
 ## License
 
